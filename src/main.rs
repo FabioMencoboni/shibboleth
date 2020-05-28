@@ -14,18 +14,19 @@ pub fn tokenize(text: &str) -> Vec<String> {
 }
 
 
-#[derive(Debug, Copy, Clone)]
+/*#[derive(Debug, Copy, Clone)]
 struct Nexus {
     w_in_to_hidden: f32,
     w_hidden_to_out: f32,
-}
+}*/
 
 
 struct Encoder {
     vec_size: usize,                        // dimensionality of word embeddings
     epochs: usize,                          // # of training ephocs completed
     vocab: HashMap<String, (usize, usize)>,              // word -> (index, frequency)
-    weights: HashMap<(usize, usize), Nexus> // weights
+    w_in_to_hidden: HashMap<(usize, usize), f32>,
+    w_hidden_to_out: HashMap<(usize, usize), f32> // weights // weights
 } 
 
 impl Encoder {
@@ -34,24 +35,27 @@ impl Encoder {
         println!("Initializing a new encoder with {}-element word vectors using {}", &vec_size, &vocab_file);
         let vocab = load_vocab(vocab_file);
         let mut rng = rand::thread_rng();
-        let mut w_in_to_hidden: f32;// = -0.01f32 + 0.02f32*rng.gen::<f32>();
-        let mut w_hidden_to_out: f32;// = -0.01f32 + 0.02f32*rng.gen::<f32>();
-        let mut weights: HashMap<(usize, usize), Nexus> = HashMap::new();
+        let mut win: f32;// = -0.01f32 + 0.02f32*rng.gen::<f32>();
+        let mut wout: f32;// = -0.01f32 + 0.02f32*rng.gen::<f32>();
+        let mut w_in_to_hidden: HashMap<(usize, usize), f32> = HashMap::new();
+        let mut w_hidden_to_out: HashMap<(usize, usize), f32> = HashMap::new();
         for (key, (index, count)) in vocab.iter() {
             for j in 0..vec_size {
-                w_in_to_hidden = -0.01f32 + 0.02f32*rng.gen::<f32>();
-                w_hidden_to_out = -0.01f32 + 0.02f32*rng.gen::<f32>();
-                let nex = Nexus{w_in_to_hidden: w_in_to_hidden, w_hidden_to_out:w_hidden_to_out};
-                weights.insert((*index, j), nex);
+                win = -0.01f32 + 0.02f32*rng.gen::<f32>();
+                wout = -0.01f32 + 0.0f32*rng.gen::<f32>();
+                w_in_to_hidden.insert((*index, j), win);
+                w_hidden_to_out.insert((*index, j), wout);
             }
         }
-        let enc = Encoder{vec_size: vec_size, epochs: 0, vocab: vocab.clone(), weights: weights};
+        let enc = Encoder{vec_size: vec_size, epochs: 0, vocab: vocab.clone(), w_in_to_hidden: w_in_to_hidden, w_hidden_to_out: w_hidden_to_out};
         enc // return the encoder object
     }
 
-    pub fn predict(&self, input: &str, output: &str) -> Option<f32> {
+    pub fn predict(&self, input_word: &str, output: &str) -> Option<f32> {
+        // give the sigmoid (not softmax) output for an input and and output string
+        // the Option<f32> will be of the None type if one of the keys is missing
         let null_32: Option<f32> = None; 
-        let input_idx: usize = match self.vocab.get(input){
+        let input_idx: usize = match self.vocab.get(input_word){
             Some(val) => val.0,
             None => return null_32
         };
@@ -63,19 +67,86 @@ impl Encoder {
         let mut win: f32;
         let mut wout: f32;
         for j in 0..self.vec_size {
-            win = match self.weights.get(&(input_idx, j)) {
-                Some(&val) => val.w_hidden_to_out,
+            win = match self.w_in_to_hidden.get(&(input_idx, j)) {
+                Some(&val) => val,
                 None => 0f32
             };
-            wout = match self.weights.get(&(output_idx, j)) {
-                Some(&val) => val.w_hidden_to_out,
+            wout = match self.w_hidden_to_out.get(&(output_idx, j)) {
+                Some(&val) => val,
                 None => 0f32
             };
             z = z + (win * wout);
         }
-        Some(z)
+        // apply sigmoid activation
+        let a: f32 = 1f32/(1f32+2.718f32.powf(z));
+        Some(a)
     }
 
+
+    pub fn train(&mut self, input_word: &str, outputs: HashMap<String, f32>) -> Option<f32> {
+        // train on one window + some negative samples
+        // input_word: input string
+        // output: String-> 1f32 for grams in the window, String->0f32 
+        let null_32: Option<f32> = None; 
+        let mut squared_error: f32 = 0f32;
+        let mut hidden_error: HashMap<usize, f32> = HashMap::new();
+        let input_idx: usize = match self.vocab.get(input_word){
+            Some(val) => val.0,
+            None => return null_32 // you gave an input_word not in the vocab
+        };
+        for (output_word, is_in_window) in outputs.iter() {
+            let output_idx: usize = match self.vocab.get(output_word){
+                Some(val) => val.0,
+                None => continue
+            };
+            let mut z: f32 = 0f32;
+            let mut win: f32;
+            let mut wout: f32;
+            for j in 0..self.vec_size {
+                win = match self.w_in_to_hidden.get(&(input_idx, j)) {
+                    Some(&val) => val,
+                    None => 0f32 // should never be used
+                };
+                wout = match self.w_hidden_to_out.get(&(output_idx, j)) {
+                    Some(&val) => val,
+                    None => 0f32 // should never be used
+                };
+                z = z + (win * wout);
+            }
+            // apply sigmoid activation
+            let a: f32 = 1f32/(1f32+2.718f32.powf(-z));
+            let word_error: f32 = a - is_in_window;
+            //println!("a={}, z={}, we={}",&a,&z,&word_error);
+            squared_error = squared_error + (word_error * word_error);
+            // update weights from the hidden layer to the output layer
+            for j in 0..self.vec_size {
+                let wout = match self.w_hidden_to_out.get(&(output_idx, j)) {
+                    Some(val) => val.clone(),
+                    None => 0f32
+                };
+                let new_wout: f32 = wout - 0.05f32*word_error;
+                self.w_hidden_to_out.insert((output_idx, j), new_wout);
+                //*self.w_hidden_to_out.entry((output_idx, j)).or_insert(0f32) *= (1f32-0.008f32*word_error); 
+                //println!("wout{}, we{}",wout, word_error);
+                *hidden_error.entry(j).or_insert(0f32) += (wout*word_error);
+            }
+        // update weights from the input layer to the hidden layer
+        for j in 0..self.vec_size {
+            let node_error: f32 = match hidden_error.get(&j){
+                Some(val) => val.clone(),
+                None => 0f32
+            };
+            let win = match self.w_in_to_hidden.get(&(input_idx, j)) {
+                Some(val) => val.clone(),
+                None => 0f32
+            };
+            //println!("node error {} {}", input_word, &node_error);
+            let new_win: f32 = win - 0.05f32*word_error;
+            self.w_in_to_hidden.insert((input_idx, j), new_win);
+        }
+        }
+        Some(squared_error)
+    }
 }
 
 
@@ -174,6 +245,28 @@ fn main() {
         None => println!("key is missing")
     }
     
+    let mut data1: HashMap<String, f32> = HashMap::new();
+    data1.insert("black".to_string(), 1f32);
+    data1.insert("brazil".to_string(), 0f32);
+    let mut data2: HashMap<String, f32> = HashMap::new();
+    data2.insert("forest".to_string(), 1f32);
+    data2.insert("brazil".to_string(), 0f32);
+    data2.insert("black".to_string(), 1f32);
+
+    for _ in 0..10000 {
+        let error1: Option<f32> = enc.train("forest", data1.clone());
+        let error2: Option<f32> = enc.train("sea", data2.clone());
+        let mut error: f32 = 0f32;
+        error = error + match error1 {
+            Some(val) => val,
+            None => 0f32
+        };
+        error = error + match error2 {
+            Some(val) => val,
+            None => 0f32
+        };
+        println!("error {}", error);
+    }
 
     println!("Hello, world!");
 }
