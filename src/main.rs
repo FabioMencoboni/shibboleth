@@ -83,8 +83,8 @@ impl Encoder {
     }
 
 
-    pub fn train(&mut self, input_word: &str, outputs: HashMap<String, f32>) -> Option<f32> {
-        // train on one window + some negative samples
+    pub fn example(&mut self, input_word: &str, outputs: HashMap<String, f32>) -> Option<f32> {
+        // train on one window + some negative samples example
         // input_word: input string
         // output: String-> 1f32 for grams in the window, String->0f32 
         let null_32: Option<f32> = None; 
@@ -146,6 +146,59 @@ impl Encoder {
         }
         }
         Some(squared_error)
+    }
+
+    pub fn train_from_db(&mut self, db_file: &str, n_docs: usize, skip_docs: usize) {
+    
+        let mut rng = rand::thread_rng();
+        //let mut center: usize = 0;
+        let mut start: usize = 0;
+        let mut end: usize = 0;
+        let mut docs_processed: usize = 0;
+        let mut doc_errors = 0f32;
+
+        let conn = db::open(&db_file).unwrap();
+        conn.iterate(format!("SELECT text FROM documents LIMIT {} OFFSET {}", n_docs, skip_docs),	|pairs| {
+            for &(_, value) in pairs.iter() { // _ = column
+                // build a list then use it below, as you can't borrow twice
+                let document: &str = value.unwrap();
+                let tokens = tokenize(&document);
+                let mut output: HashMap<String, f32> = HashMap::new();
+                for center in 0..tokens.len() {
+                    output = HashMap::new();
+                    // apply negative sampling
+                    /*for (word, _) in &self.vocab {
+                        if rng.gen::<f32>() < 0.0006f32 {
+                            output.insert(word.clone(), 0f32);
+                        }
+                    }*/
+                    
+                    if center > 4 { // trying to compare 1-4 on usize (positive only) gives an overflow
+                        start = center - 4;
+                    } else {
+                        start = 0;
+                    }
+                    end = cmp::min(tokens.len(), center + 4);
+                    //println!("start {} center {} end{}", start, center, end);
+                    for position in start..end {
+                        if position != center {
+                            output.insert(tokens[position].clone(), 1f32);
+                        }
+                    }
+                    
+                    let err = self.example(&tokens[center], output);
+                    doc_errors = doc_errors + match err {
+                        Some(val) => val,
+                        None => 0f32
+                    };
+                }
+                docs_processed = docs_processed + 1;
+                println!("{} docs, err={}", docs_processed, doc_errors);
+                doc_errors = 0f32;
+                
+       
+            } true
+        }).unwrap();
     }
 }
 
@@ -238,8 +291,8 @@ fn main() {
 
  
     //shibboleth::build_vocab_from_db("wiki.db", "wikivocab.txt", 1000000, 25000);
-    let mut enc = Encoder::new(300, "delvocab.txt");
-    let p = enc.predict("forest", "sea");
+    let mut enc = Encoder::new(200, "WikiVocab25k.txt");
+    let p = enc.predict("forest", "forest");
     match p {
         Some(val) => println!("pred={}", val),
         None => println!("key is missing")
@@ -250,12 +303,12 @@ fn main() {
     data1.insert("brazil".to_string(), 0f32);
     let mut data2: HashMap<String, f32> = HashMap::new();
     data2.insert("forest".to_string(), 1f32);
-    data2.insert("brazil".to_string(), 0f32);
+    data2.insert("ojoiji".to_string(), 0f32);
     data2.insert("black".to_string(), 1f32);
 
-    for _ in 0..10000 {
-        let error1: Option<f32> = enc.train("forest", data1.clone());
-        let error2: Option<f32> = enc.train("sea", data2.clone());
+    for _ in 0..10 {
+        let error1: Option<f32> = enc.example("forest", data1.clone());
+        let error2: Option<f32> = enc.example("sekkka", data2.clone());
         let mut error: f32 = 0f32;
         error = error + match error1 {
             Some(val) => val,
@@ -269,6 +322,8 @@ fn main() {
     }
 
     println!("Hello, world!");
+
+    enc.train_from_db("wiki.db", 100, 20);
 }
 
 #[test]
