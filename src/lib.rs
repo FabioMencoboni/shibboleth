@@ -5,7 +5,6 @@ use zoea::nlp;
 use sqlite as db;
 use std::{cmp, fs::File, io::{self, BufReader,Write}};
 use std::io::prelude::*; // needed to have File.lines() work
-//use std::;//, BufReader, BufRead, Error};
 
 
 pub fn tokenize(text: &str) -> Vec<String> {
@@ -13,15 +12,7 @@ pub fn tokenize(text: &str) -> Vec<String> {
     tokens
 }
 
-
-/*#[derive(Debug, Copy, Clone)]
-struct Nexus {
-    w_in_to_hidden: f32,
-    w_hidden_to_out: f32,
-}*/
-
-
-struct Encoder {
+pub struct Encoder {
     vec_size: usize,                        // dimensionality of word embeddings
     ct_epochs: f32,                          // # of training ephocs completed
     ct_docs: f32,
@@ -130,7 +121,6 @@ impl Encoder {
             // apply sigmoid activation
             let a: f32 = 1f32/(1f32+2.718f32.powf(-z));
             let word_error: f32 = a - is_in_window;
-            //println!("a={}, z={}, we={}",&a,&z,&word_error);
             squared_error = squared_error + (word_error * word_error);
             // update weights from the hidden layer to the output layer
             for j in 0..self.vec_size {
@@ -140,8 +130,6 @@ impl Encoder {
                 };
                 let new_wout: f32 = wout - 0.05f32*word_error;
                 self.w_hidden_to_out.insert((output_idx, j), new_wout);
-                //*self.w_hidden_to_out.entry((output_idx, j)).or_insert(0f32) *= (1f32-0.008f32*word_error); 
-                //println!("wout{}, we{}",wout, word_error);
                 *hidden_error.entry(j).or_insert(0f32) += (wout*word_error);
             }
         // update weights from the input layer to the hidden layer
@@ -166,7 +154,7 @@ impl Encoder {
         let mut start: usize = 0;
         let mut end: usize = 0;
         let tokens = tokenize(document);
-        let mut output: HashMap<String, f32>;// = HashMap::new();
+        let mut output: HashMap<String, f32>;
         for center in 0..tokens.len() {
             
             output = HashMap::new();
@@ -186,14 +174,11 @@ impl Encoder {
                 start = 0;
             }
             end = cmp::min(tokens.len(), center + 4);
-            //println!("start {} center {} end{}", start, center, end);
             for position in start..end {
                 if position != center {
                     output.insert(tokens[position].clone(), 1f32);
                 }
-            }
-            //println!("output{:#?}", &output);
-            
+            }           
             let err = self.example(&tokens[center], output);
             self.total_error = self.total_error + match err {
                 Some(val) => val,
@@ -210,18 +195,8 @@ impl Encoder {
     pub fn train_from_db(&mut self, db_file: &str, n_docs: usize, skip_docs: usize) {
     
         let mut rng = rand::thread_rng();
-        //let mut center: usize = 0;
-        //let mut start: usize = 0;
-        //let mut end: usize = 0;
         let mut docs_processed: usize = 0;
         let mut doc_errors = 0f32;
-        
-        let mut rng = rand::thread_rng();
-        //let mut negative_idx: usize = 0;
-        //let mut total_windows: f32 = 0f32;
-        //let mut total_errors: f32 = 0f32;
-        
-
 
         let conn = db::open(&db_file).unwrap();
         conn.iterate(format!("SELECT text FROM documents LIMIT {} OFFSET {}", n_docs, skip_docs),	|pairs| {
@@ -237,7 +212,7 @@ impl Encoder {
 
 
 
-fn load_vocab(vocab_file: &str) -> HashMap<String, (usize, usize)> {
+pub fn load_vocab(vocab_file: &str) -> HashMap<String, (usize, usize)> {
     let mut word = String::new();
     let mut count: usize = 0;
     let mut position: usize = 0;
@@ -307,46 +282,8 @@ pub fn build_vocab_from_db(db_file: &str, vocab_file: &str, n_docs: usize, vocab
     
 
 }
-/**
- let conn = db::open(&db_name).unwrap();
-self.conn
-			.iterate(expr,
-				|pairs| {
-				for &(_, value) in pairs.iter() { // _ = column
-					// build a list then use it below, as you can't borrow twice
-					let firstword: String = value.unwrap().to_string();
-					set_firstwords.insert(firstword);
-
-				} true 
-		   }).unwrap();
- */
-fn main() {
-
- 
-    //shibboleth::build_vocab_from_db("wiki.db", "wikivocab.txt", 1000000, 25000);
-    
 
 
-    //enc.train_from_db("wiki.db", 100, 20);
-    let tokens = tokenize("fish chips");
-    for tok in tokens{
-        println!("Token {}",tok);
-    }
-    let mut enc = Encoder::new(200, "WikiVocab25k.txt");
-
-    let p = enc.predict("fish", "chips");
-    match p {
-        Some(val) => println!("'Fish'->'Chips' sigmoid activation before training: {}", val),
-        None => println!("One of these words is not in your vocabulary")
-    }
-    enc.train_doc("I like to eat fish & chips.");
-    enc.train_doc("Steve has chips with his fish.");
-    let p = enc.predict("fish", "chips");
-    match p {
-        Some(val) => println!("'Fish'->'Chips' sigmoid activation after training: {}", val),
-        None => println!("One of these words is not in your vocabulary")
-    }
-}
 
 #[test]
 fn test_tokenization(){
