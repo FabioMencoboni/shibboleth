@@ -24,8 +24,40 @@ $ wget -O wiki.db.gz https://dl.fbaipublicfiles.com/drqa/docs.db.gz && gunzip wi
 ```
 #### Building Vocabulary
 
-This example takes the *wiki.db* file downloaded above, runs through the first 1,000,000 documents, stems them, and builds a vocabulary of the 25,000 most common words. The output will be saved to WikiVocab.txt
+This example takes the *wiki.db* file downloaded above, runs through the first 1,000,000 documents, stems them, and builds a vocabulary of the 25,000 most common words. The output will be saved to WikiVocab25k.txt
 ```
 use shibboleth;
 shibboleth::build_vocab_from_db("wiki.db", "WikiVocab25k.txt", 1000000, 25000);
+```
+
+#### Training
+
+```
+use shibboleth;
+
+// create a new encoder object with 200 elements per word vector from a vocabulary file
+let mut enc = shibboleth::Encoder::new(200, "WikiVocab25k.txt");
+
+// the prediction (sigmoid) for 'chips' occuring near 'fish' should be near 0.5 prior to training
+let p = enc.predict("fish", "chips");
+match p {
+    Some(val) => println!("'Fish'->'Chips' sigmoid activation before training: {}", val),
+    None => println!("One of these words is not in your vocabulary")
+}
+
+// train on two examples
+enc.train_doc("I like to eat fish & chips.");
+enc.train_doc("Steve has chips with his fish.");
+
+// after training, the prediction should be near unity
+let p = enc.predict("fish", "chips");
+match p {
+    Some(val) => println!("'Fish'->'Chips' sigmoid activation after training: {}", val),
+    None => println!("One of these words is not in your vocabulary")
+}
+```
+Typical Output:
+```
+'Fish'->'Chips' sigmoid activation before training: 0.5002038
+'Fish'->'Chips' sigmoid activation after training: 0.999495
 ```

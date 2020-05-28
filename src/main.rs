@@ -23,10 +23,15 @@ struct Nexus {
 
 struct Encoder {
     vec_size: usize,                        // dimensionality of word embeddings
-    epochs: usize,                          // # of training ephocs completed
+    ct_epochs: f32,                          // # of training ephocs completed
+    ct_docs: f32,
+    ct_words: f32,
+    total_error: f32,
     vocab: HashMap<String, (usize, usize)>,              // word -> (index, frequency)
     w_in_to_hidden: HashMap<(usize, usize), f32>,
-    w_hidden_to_out: HashMap<(usize, usize), f32> // weights // weights
+    w_hidden_to_out: HashMap<(usize, usize), f32>, // weights // weights
+    negative_samples: HashMap<usize, String> ,
+    negative_idx: usize
 } 
 
 impl Encoder {
@@ -47,7 +52,14 @@ impl Encoder {
                 w_hidden_to_out.insert((*index, j), wout);
             }
         }
-        let enc = Encoder{vec_size: vec_size, epochs: 0, vocab: vocab.clone(), w_in_to_hidden: w_in_to_hidden, w_hidden_to_out: w_hidden_to_out};
+        // create a lookup table for negative samples
+        let mut negative_samples: HashMap<usize, String> = HashMap::new();
+        let mut k = 0;
+        for (word, _) in &vocab {
+            k = k+1;
+            negative_samples.insert(k, word.clone());
+        }
+        let enc = Encoder{vec_size: vec_size, ct_epochs: 0f32,ct_docs: 0f32,total_error:0f32, ct_words:0f32,vocab: vocab.clone(), w_in_to_hidden: w_in_to_hidden, w_hidden_to_out: w_hidden_to_out, negative_samples:negative_samples, negative_idx:0};
         enc // return the encoder object
     }
 
@@ -55,11 +67,13 @@ impl Encoder {
         // give the sigmoid (not softmax) output for an input and and output string
         // the Option<f32> will be of the None type if one of the keys is missing
         let null_32: Option<f32> = None; 
-        let input_idx: usize = match self.vocab.get(input_word){
+        let input_tok = tokenize(input_word)[0].clone();
+        let output_tok = tokenize(output)[0].clone();
+        let input_idx: usize = match self.vocab.get(&input_tok){
             Some(val) => val.0,
             None => return null_32
         };
-        let output_idx: usize = match self.vocab.get(output){
+        let output_idx: usize = match self.vocab.get(&output_tok){
             Some(val) => val.0,
             None => return null_32
         };
@@ -148,24 +162,65 @@ impl Encoder {
         Some(squared_error)
     }
 
+    pub fn train_doc(&mut self, document: &str) {
+        let mut start: usize = 0;
+        let mut end: usize = 0;
+        let tokens = tokenize(document);
+        let mut output: HashMap<String, f32>;// = HashMap::new();
+        for center in 0..tokens.len() {
+            
+            output = HashMap::new();
+            // apply negative sampling 
+            for _ in 0..10 {
+                self.negative_idx = self.negative_idx + 1;
+                let neg_mod: usize = self.negative_idx % self.negative_samples.len();
+                let negative_word: String = match self.negative_samples.get(&neg_mod) {
+                    Some(neg_word) => neg_word.clone(),
+                    None => "nonexistttt".to_string()
+                };
+                output.insert(negative_word, 0f32);
+            }       
+            if center > 4 { // trying to compare 1-4 on usize (positive only) gives an overflow
+                start = center - 4;
+            } else {
+                start = 0;
+            }
+            end = cmp::min(tokens.len(), center + 4);
+            //println!("start {} center {} end{}", start, center, end);
+            for position in start..end {
+                if position != center {
+                    output.insert(tokens[position].clone(), 1f32);
+                }
+            }
+            //println!("output{:#?}", &output);
+            
+            let err = self.example(&tokens[center], output);
+            self.total_error = self.total_error + match err {
+                Some(val) => val,
+                None => 0f32
+            };
+            self.ct_words = self.ct_words+1f32;
+            
+        }
+        self.ct_docs = self.ct_docs+1f32;
+        println!("ct_docs={}, ct_words={}, tot_err/ct_docs={}", self.ct_docs, self.ct_words, self.total_error/self.ct_docs);
+    }
+
+
     pub fn train_from_db(&mut self, db_file: &str, n_docs: usize, skip_docs: usize) {
     
         let mut rng = rand::thread_rng();
         //let mut center: usize = 0;
-        let mut start: usize = 0;
-        let mut end: usize = 0;
+        //let mut start: usize = 0;
+        //let mut end: usize = 0;
         let mut docs_processed: usize = 0;
         let mut doc_errors = 0f32;
-        let mut negative_samples: HashMap<usize, String> = HashMap::new();
+        
         let mut rng = rand::thread_rng();
-        let mut negative_idx: usize = 0;
-        let mut total_windows: f32 = 0f32;
-        let mut total_errors: f32 = 0f32;
-        let mut k = 0;
-        for (word, _) in &self.vocab {
-            k = k+1;
-            negative_samples.insert(k, word.clone());
-        }
+        //let mut negative_idx: usize = 0;
+        //let mut total_windows: f32 = 0f32;
+        //let mut total_errors: f32 = 0f32;
+        
 
 
         let conn = db::open(&db_file).unwrap();
@@ -173,46 +228,7 @@ impl Encoder {
             for &(_, value) in pairs.iter() { // _ = column
                 // build a list then use it below, as you can't borrow twice
                 let document: &str = value.unwrap();
-                let tokens = tokenize(&document);
-                let mut output: HashMap<String, f32> = HashMap::new();
-                for center in 0..tokens.len() {
-                    output = HashMap::new();
-                    // apply negative sampling 
-                    for _ in 0..10 {
-                        negative_idx = negative_idx + 1;
-                        let neg_mod: usize = negative_idx % negative_samples.len();
-                        let negative_word: String = match negative_samples.get(&neg_mod) {
-                            Some(neg_word) => neg_word.clone(),
-                            None => "nonexistttt".to_string()
-                        };
-                        output.insert(negative_word, 0f32);
-                    }
-                    
-                    
-                    if center > 4 { // trying to compare 1-4 on usize (positive only) gives an overflow
-                        start = center - 4;
-                    } else {
-                        start = 0;
-                    }
-                    end = cmp::min(tokens.len(), center + 4);
-                    //println!("start {} center {} end{}", start, center, end);
-                    for position in start..end {
-                        if position != center {
-                            output.insert(tokens[position].clone(), 1f32);
-                        }
-                    }
-                    //println!("output{:#?}", &output);
-                    total_windows = total_windows + 1f32;
-                    let err = self.example(&tokens[center], output);
-                    total_errors = total_errors + match err {
-                        Some(val) => val,
-                        None => 0f32
-                    };
-                }
-                docs_processed = docs_processed + 1;
-                println!("{} docs, {} windows, err/window={}", docs_processed, total_windows, total_errors/total_windows);
-                doc_errors = 0f32;
-                
+                self.train_doc(document);
        
             } true
         }).unwrap();
@@ -308,39 +324,28 @@ fn main() {
 
  
     //shibboleth::build_vocab_from_db("wiki.db", "wikivocab.txt", 1000000, 25000);
-    let mut enc = Encoder::new(200, "WikiVocab25k.txt");
-    let p = enc.predict("forest", "forest");
-    match p {
-        Some(val) => println!("pred={}", val),
-        None => println!("key is missing")
-    }
     
-    let mut data1: HashMap<String, f32> = HashMap::new();
-    data1.insert("black".to_string(), 1f32);
-    data1.insert("brazil".to_string(), 0f32);
-    let mut data2: HashMap<String, f32> = HashMap::new();
-    data2.insert("forest".to_string(), 1f32);
-    data2.insert("ojoiji".to_string(), 0f32);
-    data2.insert("black".to_string(), 1f32);
 
-    for _ in 0..10 {
-        let error1: Option<f32> = enc.example("forest", data1.clone());
-        let error2: Option<f32> = enc.example("sekkka", data2.clone());
-        let mut error: f32 = 0f32;
-        error = error + match error1 {
-            Some(val) => val,
-            None => 0f32
-        };
-        error = error + match error2 {
-            Some(val) => val,
-            None => 0f32
-        };
-        println!("error {}", error);
+
+    //enc.train_from_db("wiki.db", 100, 20);
+    let tokens = tokenize("fish chips");
+    for tok in tokens{
+        println!("Token {}",tok);
     }
+    let mut enc = Encoder::new(200, "WikiVocab25k.txt");
 
-    println!("Hello, world!");
-
-    enc.train_from_db("wiki.db", 100, 20);
+    let p = enc.predict("fish", "chips");
+    match p {
+        Some(val) => println!("'Fish'->'Chips' sigmoid activation before training: {}", val),
+        None => println!("One of these words is not in your vocabulary")
+    }
+    enc.train_doc("I like to eat fish & chips.");
+    enc.train_doc("Steve has chips with his fish.");
+    let p = enc.predict("fish", "chips");
+    match p {
+        Some(val) => println!("'Fish'->'Chips' sigmoid activation after training: {}", val),
+        None => println!("One of these words is not in your vocabulary")
+    }
 }
 
 #[test]
@@ -348,4 +353,17 @@ fn test_tokenization(){
     let tokens = tokenize("Totally! I love cupcakes!");
     assert_eq!(tokens[0], "total");
     assert_eq!(tokens[3], "cupcak");
+}
+
+#[test]
+fn test_sigmoid(){
+    let mut enc = Encoder::new(200, "WikiVocab25k.txt");
+    enc.train_doc("I like to eat fish & chips.");
+    enc.train_doc("Steve has chips with his fish.");
+    let p: Option<f32> = enc.predict("fish", "chips");
+    let activation: f32 = match p {
+        Some(val) => val,
+        None => 0f32
+    };
+    assert!(activation > 0.98);
 }
