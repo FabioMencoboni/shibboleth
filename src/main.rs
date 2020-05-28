@@ -1,6 +1,6 @@
 
 use std::collections::HashMap;
-use rand::Rng;
+use rand::{Rng};
 use zoea::nlp;
 use sqlite as db;
 use std::{cmp, fs::File, io::{self, BufReader,Write}};
@@ -156,6 +156,17 @@ impl Encoder {
         let mut end: usize = 0;
         let mut docs_processed: usize = 0;
         let mut doc_errors = 0f32;
+        let mut negative_samples: HashMap<usize, String> = HashMap::new();
+        let mut rng = rand::thread_rng();
+        let mut negative_idx: usize = 0;
+        let mut total_windows: f32 = 0f32;
+        let mut total_errors: f32 = 0f32;
+        let mut k = 0;
+        for (word, _) in &self.vocab {
+            k = k+1;
+            negative_samples.insert(k, word.clone());
+        }
+
 
         let conn = db::open(&db_file).unwrap();
         conn.iterate(format!("SELECT text FROM documents LIMIT {} OFFSET {}", n_docs, skip_docs),	|pairs| {
@@ -166,12 +177,17 @@ impl Encoder {
                 let mut output: HashMap<String, f32> = HashMap::new();
                 for center in 0..tokens.len() {
                     output = HashMap::new();
-                    // apply negative sampling
-                    /*for (word, _) in &self.vocab {
-                        if rng.gen::<f32>() < 0.0006f32 {
-                            output.insert(word.clone(), 0f32);
-                        }
-                    }*/
+                    // apply negative sampling 
+                    for _ in 0..10 {
+                        negative_idx = negative_idx + 1;
+                        let neg_mod: usize = negative_idx % negative_samples.len();
+                        let negative_word: String = match negative_samples.get(&neg_mod) {
+                            Some(neg_word) => neg_word.clone(),
+                            None => "nonexistttt".to_string()
+                        };
+                        output.insert(negative_word, 0f32);
+                    }
+                    
                     
                     if center > 4 { // trying to compare 1-4 on usize (positive only) gives an overflow
                         start = center - 4;
@@ -185,15 +201,16 @@ impl Encoder {
                             output.insert(tokens[position].clone(), 1f32);
                         }
                     }
-                    
+                    //println!("output{:#?}", &output);
+                    total_windows = total_windows + 1f32;
                     let err = self.example(&tokens[center], output);
-                    doc_errors = doc_errors + match err {
+                    total_errors = total_errors + match err {
                         Some(val) => val,
                         None => 0f32
                     };
                 }
                 docs_processed = docs_processed + 1;
-                println!("{} docs, err={}", docs_processed, doc_errors);
+                println!("{} docs, {} windows, err/window={}", docs_processed, total_windows, total_errors/total_windows);
                 doc_errors = 0f32;
                 
        
