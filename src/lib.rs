@@ -41,6 +41,7 @@ fn vec_update(a: &mut Vec<f32>, b: &mut Vec<f32>, alpha: f32) {
 
 pub struct Encoder {
     vec_size: usize,                        // dimensionality of word embeddings
+    alpha: f32,
     ct_epochs: f32,                          // # of training ephocs completed
     ct_docs: f32,
     ct_words: f32,
@@ -53,7 +54,7 @@ pub struct Encoder {
 } 
 
 impl Encoder {
-    pub fn new(vec_size: usize, vocab_file: &str) -> Encoder {
+    pub fn new(vec_size: usize, vocab_file: &str, alpha: f32) -> Encoder {
         // generate and return a new Encoder using a specified vector size and a vocabulary file
         println!("Initializing a new encoder with {}-element word vectors using {}", &vec_size, &vocab_file);
         let vocab = load_vocab(vocab_file);
@@ -66,8 +67,8 @@ impl Encoder {
             let mut vec_in: Vec<f32> = Vec::new();
             let mut vec_out: Vec<f32> = Vec::new();
             for j in 0..vec_size {
-                win = -0.01f32 + 0.02f32*rng.gen::<f32>();
-                wout = -0.01f32 + 0.0f32*rng.gen::<f32>();
+                win = -0.001f32 + 0.002f32*rng.gen::<f32>();
+                wout = -0.001f32 + 0.00f32*rng.gen::<f32>();
                 vec_in.push(win);
                 vec_out.push(wout);
             word_input_vecs.insert(key.clone(), vec_in.clone());
@@ -81,7 +82,7 @@ impl Encoder {
             k = k+1;
             negative_samples.insert(k, word.clone());
         }
-        let enc = Encoder{vec_size: vec_size, ct_epochs: 0f32,ct_docs: 0f32,total_error:0f32, ct_words:0f32,vocab: vocab.clone(), word_input_vecs: word_input_vecs, word_output_vecs: word_output_vecs, negative_samples:negative_samples, negative_idx:0};
+        let enc = Encoder{vec_size: vec_size,alpha:alpha, ct_epochs: 0f32,ct_docs: 0f32,total_error:0f32, ct_words:0f32,vocab: vocab.clone(), word_input_vecs: word_input_vecs, word_output_vecs: word_output_vecs, negative_samples:negative_samples, negative_idx:0};
         enc // return the encoder object
     }
 
@@ -141,10 +142,10 @@ impl Encoder {
             //vec_delta( y_vec, -0.05f32*word_error);
             squared_error = squared_error + (word_error * word_error);
             // START OF GRADIENT DESCENT MATHS
-            vec_update(y_vec, x_vec, -0.12f32*word_error);
+            vec_update(y_vec, x_vec, -self.alpha*word_error);
             vec_update(&mut hidden_error,  y_vec, word_error);
         }
-        vec_update(x_vec, &mut hidden_error, -0.08f32);
+        vec_update(x_vec, &mut hidden_error, -self.alpha/18f32); // about 18 docs
         // END OF GRADIENT DESCENT MATHS
         Some(squared_error/ct_outputs)
     }
@@ -293,7 +294,7 @@ fn test_tokenization(){
 
 #[test]
 fn test_sigmoid(){
-    let mut enc = Encoder::new(40, "WikiVocab25k.txt");
+    let mut enc = Encoder::new(40, "WikiVocab25k.txt", 0.05);
     let mut activation: f32 = 0f32;
     for _ in 0..100 {
         enc.train_doc("I like to eat fish & chips.");
@@ -310,7 +311,7 @@ fn test_sigmoid(){
 
 #[test]
 fn mini_trial_training(){
-    let mut enc = Encoder::new(40, "WikiVocab25k.txt");
+    let mut enc = Encoder::new(40, "WikiVocab25k.txt", 0.05);
     for _ in 0..20{
         enc.train_doc("Steve has chips with his fish.");
     }
@@ -318,6 +319,6 @@ fn mini_trial_training(){
 
 #[test]
 fn trial_training(){
-    let mut enc = Encoder::new(40, "WikiVocab25k.txt");
+    let mut enc = Encoder::new(40, "WikiVocab25k.txt", 0.05);
     enc.train_from_db("wiki.db", 3, 0);
 }

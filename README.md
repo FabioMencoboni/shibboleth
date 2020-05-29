@@ -35,8 +35,12 @@ shibboleth::build_vocab_from_db("wiki.db", "WikiVocab25k.txt", 1000000, 25000);
 ```
 use shibboleth;
 
-// create a new encoder object with 200 elements per word vector from a vocabulary file
-let mut enc = shibboleth::Encoder::new(200, "WikiVocab25k.txt");
+// create a new encoder object 
+let mut enc = shibboleth::Encoder::new(
+	200, 				// elements per word vector
+	"WikiVocab25k.txt", 	// vocabulary file
+	0.03					// alpha (learning rate)
+	);
 
 // the prediction (sigmoid) for 'chips' occuring near 'fish' should be near 0.5 prior to training
 let p = enc.predict("fish", "chips");
