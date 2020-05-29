@@ -1,7 +1,7 @@
 [package]
 name = "shibboleth"
 license = "Apache-2.0"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Fabio Mencoboni <Fabio.Mencoboni@gmail.com>"]
 edition = "2018"
 description = "Pure-Rust implementation of word2vec embeddings"
@@ -12,3 +12,6 @@ readme = "README.md"
 sqlite = "0.25.0"
 rand = "0.7.3"
 zoea = "0.0.8"
+# stuff for blazing_dot
+# packed_simd = "0.3.3" feature only works with nightly compile??
+rayon = "1.3.0"

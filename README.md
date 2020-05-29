@@ -45,9 +45,11 @@ match p {
     None => println!("One of these words is not in your vocabulary")
 }
 
-// train on two examples
-enc.train_doc("I like to eat fish & chips.");
-enc.train_doc("Steve has chips with his fish.");
+// train 
+for _ in 0..100 {
+    enc.train_doc("I like to eat fish & chips.");
+    enc.train_doc("Steve has chips with his fish.");
+}
 
 // after training, the prediction should be near unity
 let p = enc.predict("fish", "chips");

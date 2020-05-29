@@ -1,16 +1,43 @@
 
+// READ THIS
+// https://stackoverflow.com/questions/30414424/how-can-i-update-a-value-in-a-mutable-hashmap
+
 use std::collections::HashMap;
 use rand::{Rng};
 use zoea::nlp;
 use sqlite as db;
 use std::{cmp, fs::File, io::{self, BufReader,Write}};
 use std::io::prelude::*; // needed to have File.lines() work
+// the next few lines are needed for blazing_dot
+use rayon::prelude::*;
+use std::vec::Vec;
 
 
 pub fn tokenize(text: &str) -> Vec<String> {
     let tokens = nlp::text_tokens(text);
     tokens
 }
+
+fn blazing_dot(x: &Vec<f32>, y: &Vec<f32>) -> f32 {
+    // see https://github.com/ChingChuan-Chen/dot_product/blob/master/rust_dotproduct/src/main.rs
+    let res: f32 = x.par_iter().zip(y.par_iter()).map(|(a, b)| a * b).sum();
+    res
+}
+
+fn sigmoid(z: &f32) -> f32 {
+    let a:f32 = 1f32/(1f32+2.7182818f32.powf(-z));
+    a
+}
+
+
+fn vec_update(a: &mut Vec<f32>, b: &mut Vec<f32>, alpha: f32) {
+    // update vec a by adding alpha * vec b
+    for (ai, bi) in a.iter_mut().zip(b) {
+        *ai += (alpha * *bi);
+    }
+}
+
+
 
 pub struct Encoder {
     vec_size: usize,                        // dimensionality of word embeddings
@@ -19,8 +46,8 @@ pub struct Encoder {
     ct_words: f32,
     total_error: f32,
     vocab: HashMap<String, (usize, usize)>,              // word -> (index, frequency)
-    w_in_to_hidden: HashMap<(usize, usize), f32>,
-    w_hidden_to_out: HashMap<(usize, usize), f32>, // weights // weights
+    word_input_vecs: HashMap<String, Vec<f32>>,  // weights from input word to hidden layer
+    word_output_vecs: HashMap<String, Vec<f32>>, // weights from hidden layer to output word
     negative_samples: HashMap<usize, String> ,
     negative_idx: usize
 } 
@@ -33,14 +60,18 @@ impl Encoder {
         let mut rng = rand::thread_rng();
         let mut win: f32;// = -0.01f32 + 0.02f32*rng.gen::<f32>();
         let mut wout: f32;// = -0.01f32 + 0.02f32*rng.gen::<f32>();
-        let mut w_in_to_hidden: HashMap<(usize, usize), f32> = HashMap::new();
-        let mut w_hidden_to_out: HashMap<(usize, usize), f32> = HashMap::new();
+        let mut word_input_vecs: HashMap<String, Vec<f32>> = HashMap::new();
+        let mut word_output_vecs: HashMap<String, Vec<f32>> = HashMap::new();
         for (key, (index, count)) in vocab.iter() {
+            let mut vec_in: Vec<f32> = Vec::new();
+            let mut vec_out: Vec<f32> = Vec::new();
             for j in 0..vec_size {
                 win = -0.01f32 + 0.02f32*rng.gen::<f32>();
                 wout = -0.01f32 + 0.0f32*rng.gen::<f32>();
-                w_in_to_hidden.insert((*index, j), win);
-                w_hidden_to_out.insert((*index, j), wout);
+                vec_in.push(win);
+                vec_out.push(wout);
+            word_input_vecs.insert(key.clone(), vec_in.clone());
+            word_output_vecs.insert(key.clone(), vec_out.clone());
             }
         }
         // create a lookup table for negative samples
@@ -50,104 +81,72 @@ impl Encoder {
             k = k+1;
             negative_samples.insert(k, word.clone());
         }
-        let enc = Encoder{vec_size: vec_size, ct_epochs: 0f32,ct_docs: 0f32,total_error:0f32, ct_words:0f32,vocab: vocab.clone(), w_in_to_hidden: w_in_to_hidden, w_hidden_to_out: w_hidden_to_out, negative_samples:negative_samples, negative_idx:0};
+        let enc = Encoder{vec_size: vec_size, ct_epochs: 0f32,ct_docs: 0f32,total_error:0f32, ct_words:0f32,vocab: vocab.clone(), word_input_vecs: word_input_vecs, word_output_vecs: word_output_vecs, negative_samples:negative_samples, negative_idx:0};
         enc // return the encoder object
     }
 
-    pub fn predict(&self, input_word: &str, output: &str) -> Option<f32> {
+    pub fn word_vec(&self, word: &str) -> Option<&Vec<f32>> {
+        // given a word, tokenize it and return its vec if the token has one
+        let null_vec: Option<&Vec<f32>> = None;
+        let tok = tokenize(word)[0].clone();
+        let ovec: &Vec<f32> = match self.word_input_vecs.get(&tok){
+            Some(val) => val,
+            None => return null_vec
+        };
+        Some(ovec) // return the vector
+    }
+
+    pub fn predict(&self, x_input_word: &str, y_output_word: &str) -> Option<f32> {
         // give the sigmoid (not softmax) output for an input and and output string
         // the Option<f32> will be of the None type if one of the keys is missing
         let null_32: Option<f32> = None; 
-        let input_tok = tokenize(input_word)[0].clone();
-        let output_tok = tokenize(output)[0].clone();
-        let input_idx: usize = match self.vocab.get(&input_tok){
-            Some(val) => val.0,
+        let input_tok = tokenize(x_input_word)[0].clone();
+        let output_tok = tokenize(y_output_word)[0].clone();
+        let x_vec: &Vec<f32> = match self.word_input_vecs.get(&input_tok){
+            Some(val) => val,
             None => return null_32
         };
-        let output_idx: usize = match self.vocab.get(&output_tok){
-            Some(val) => val.0,
+        let y_vec: &Vec<f32> = match self.word_output_vecs.get(&output_tok){
+            Some(val) => val,
             None => return null_32
         };
-        let mut z: f32 = 0f32;
-        let mut win: f32;
-        let mut wout: f32;
-        for j in 0..self.vec_size {
-            win = match self.w_in_to_hidden.get(&(input_idx, j)) {
-                Some(&val) => val,
-                None => 0f32
-            };
-            wout = match self.w_hidden_to_out.get(&(output_idx, j)) {
-                Some(&val) => val,
-                None => 0f32
-            };
-            z = z + (win * wout);
-        }
+        let z: f32 = blazing_dot( x_vec,  y_vec);
         // apply sigmoid activation
-        let a: f32 = 1f32/(1f32+2.718f32.powf(z));
+        let a: f32 = sigmoid(&z);
         Some(a)
     }
 
 
-    pub fn example(&mut self, input_word: &str, outputs: HashMap<String, f32>) -> Option<f32> {
+    fn example(&mut self, input_tok: &str, outputs: HashMap<String, f32>) -> Option<f32> {
         // train on one window + some negative samples example
         // input_word: input string
         // output: String-> 1f32 for grams in the window, String->0f32 
         let null_32: Option<f32> = None; 
+        let mut ct_outputs: f32 = 0f32;
         let mut squared_error: f32 = 0f32;
-        let mut hidden_error: HashMap<usize, f32> = HashMap::new();
-        let input_idx: usize = match self.vocab.get(input_word){
-            Some(val) => val.0,
-            None => return null_32 // you gave an input_word not in the vocab
-        };
-        for (output_word, is_in_window) in outputs.iter() {
-            let output_idx: usize = match self.vocab.get(output_word){
-                Some(val) => val.0,
-                None => continue
-            };
-            let mut z: f32 = 0f32;
-            let mut win: f32;
-            let mut wout: f32;
-            for j in 0..self.vec_size {
-                win = match self.w_in_to_hidden.get(&(input_idx, j)) {
-                    Some(&val) => val,
-                    None => 0f32 // should never be used
-                };
-                wout = match self.w_hidden_to_out.get(&(output_idx, j)) {
-                    Some(&val) => val,
-                    None => 0f32 // should never be used
-                };
-                z = z + (win * wout);
+        let mut hidden_error: Vec<f32> = vec![0f32; self.vec_size]; // "error" at the hidden layer
+        if ! &self.word_input_vecs.contains_key(input_tok){
+            return null_32
+        }
+        let x_vec = self.word_input_vecs.get_mut(input_tok).unwrap();
+        for (output_tok, is_in_window) in outputs.iter() {
+            if ! self.word_output_vecs.contains_key(output_tok){
+                continue
             }
-            // apply sigmoid activation
-            let a: f32 = 1f32/(1f32+2.718f32.powf(-z));
+            ct_outputs = ct_outputs + 1f32;
+            let y_vec = self.word_output_vecs.get_mut(output_tok).unwrap();
+            let z: f32 = blazing_dot(x_vec, y_vec);
+            let a: f32 = sigmoid(&z);// apply sigmoid activation
             let word_error: f32 = a - is_in_window;
+            //vec_delta( y_vec, -0.05f32*word_error);
             squared_error = squared_error + (word_error * word_error);
-            // update weights from the hidden layer to the output layer
-            for j in 0..self.vec_size {
-                let wout = match self.w_hidden_to_out.get(&(output_idx, j)) {
-                    Some(val) => val.clone(),
-                    None => 0f32
-                };
-                let new_wout: f32 = wout - 0.05f32*word_error;
-                self.w_hidden_to_out.insert((output_idx, j), new_wout);
-                *hidden_error.entry(j).or_insert(0f32) += (wout*word_error);
-            }
-        // update weights from the input layer to the hidden layer
-        for j in 0..self.vec_size {
-            let node_error: f32 = match hidden_error.get(&j){
-                Some(val) => val.clone(),
-                None => 0f32
-            };
-            let win = match self.w_in_to_hidden.get(&(input_idx, j)) {
-                Some(val) => val.clone(),
-                None => 0f32
-            };
-            //println!("node error {} {}", input_word, &node_error);
-            let new_win: f32 = win - 0.05f32*word_error;
-            self.w_in_to_hidden.insert((input_idx, j), new_win);
+            // START OF GRADIENT DESCENT MATHS
+            vec_update(y_vec, x_vec, -0.12f32*word_error);
+            vec_update(&mut hidden_error,  y_vec, word_error);
         }
-        }
-        Some(squared_error)
+        vec_update(x_vec, &mut hidden_error, -0.08f32);
+        // END OF GRADIENT DESCENT MATHS
+        Some(squared_error/ct_outputs)
     }
 
     pub fn train_doc(&mut self, document: &str) {
@@ -294,13 +293,31 @@ fn test_tokenization(){
 
 #[test]
 fn test_sigmoid(){
-    let mut enc = Encoder::new(200, "WikiVocab25k.txt");
-    enc.train_doc("I like to eat fish & chips.");
-    enc.train_doc("Steve has chips with his fish.");
+    let mut enc = Encoder::new(40, "WikiVocab25k.txt");
+    let mut activation: f32 = 0f32;
+    for _ in 0..100 {
+        enc.train_doc("I like to eat fish & chips.");
+        enc.train_doc("Steve has chips with his fish.");
+    }
     let p: Option<f32> = enc.predict("fish", "chips");
-    let activation: f32 = match p {
+    activation = match p {
         Some(val) => val,
         None => 0f32
     };
+    println!("activation {}", activation);
     assert!(activation > 0.98);
+}
+
+#[test]
+fn mini_trial_training(){
+    let mut enc = Encoder::new(40, "WikiVocab25k.txt");
+    for _ in 0..20{
+        enc.train_doc("Steve has chips with his fish.");
+    }
+}
+
+#[test]
+fn trial_training(){
+    let mut enc = Encoder::new(40, "WikiVocab25k.txt");
+    enc.train_from_db("wiki.db", 3, 0);
 }
