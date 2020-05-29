@@ -1,7 +1,7 @@
 [package]
 name = "shibboleth"
 license = "Apache-2.0"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Fabio Mencoboni <Fabio.Mencoboni@gmail.com>"]
 edition = "2018"
 description = "Pure-Rust implementation of word2vec embeddings"
